@@ -12,9 +12,9 @@ from snakemake_interface_executor_plugins.jobs import (
 from snakemake_interface_common.exceptions import WorkflowError  # noqa
 
 import htcondor
-from os.path import join
+from os.path import join, basename
 from os import makedirs
-
+import re
 
 # Optional:
 # Define additional settings for your executor.
@@ -30,6 +30,30 @@ class ExecutorSettings(ExecutorSettingsBase):
             "help": "Directory where the job will create a directory to store log, "
             "output and error files.",
             "required": True,
+        },
+    )
+
+    universe: Optional[str] = field(
+        default="vanilla",
+        metadata={
+            "help": "The universe HTCondor should use",
+            "required": False,
+        },
+    )
+
+    container_image: Optional[str] = field(
+        default="",
+        metadata={
+            "help": "The container image to be used by container universe jobs",
+            "required": False,
+        },
+    )
+
+    job_wrapper: Optional[str] = field(
+        default="",
+        metadata={
+            "help": "A job wrapper that Snakemake will pass its arguments to.",
+            "required": False,
         },
     )
 
@@ -60,8 +84,27 @@ common_settings = CommonSettings(
     auto_deploy_default_storage_provider=True,
     # specify initial amount of seconds to sleep before checking for job status
     init_seconds_before_status_checks=0,
+    # specify that the HTCondor plugin can manage its own file transfers in non-shared FS
+    # settings. This is necessary because HTCondor has its own file transfer mechanism.
+    can_transfer_local_files=True,
 )
 
+def get_creds() -> bool:
+    """
+    Get credentials to avoid job going on hold due to lack of credentials
+    """
+    # thanks @tlmiller
+    local_provider_name = htcondor.param.get("LOCAL_CREDMON_PROVIDER_NAME")
+    if local_provider_name is None:
+        return False
+    magic = ("LOCAL:%s" % local_provider_name).encode()
+    credd = htcondor.Credd()
+    credd.add_user_cred(htcondor.CredTypes.Kerberos, magic)
+    return True
+
+
+class CredsError(Exception):
+    pass
 
 # Required:
 # Implementation of your executor
@@ -74,6 +117,8 @@ class Executor(RemoteExecutor):
 
         # jobDir: Directory where the job will tore log, output and error files.
         self.jobDir = self.workflow.executor_settings.jobdir
+        self.universe = self.workflow.executor_settings.universe
+        self.container_image = self.workflow.executor_settings.container_image
 
     def run_job(self, job: JobExecutorInterface):
         # Submitting job to HTCondor
@@ -82,7 +127,31 @@ class Executor(RemoteExecutor):
         makedirs(self.jobDir, exist_ok=True)
 
         job_exec = self.get_python_executable()
-        job_args = self.format_job_exec(job).removeprefix(job_exec + " ")
+        if self.common_settings.can_transfer_local_files:
+            # job_exec = "python"
+
+            # job_args = self.get_job_args(job) + " --configfile example_config.yaml"
+            job_args = self.format_job_exec(job).removeprefix(job_exec + " -m snakemake ")
+            match = re.search(r'--configfiles (\S+)', job_args)
+            if match:
+                configFile = match.group(1)
+                base_name = basename(configFile)
+                job_args = job_args.replace(configFile, base_name)
+            # Check if the string contains '--default-resources' and the entry after it
+            if re.search(r'--default-resources \S+', job_args):
+                # Remove '--default-resources' and the entry after it
+                job_args = re.sub(r'--default-resources \S+', '', job_args)
+
+        else:
+            job_args = self.format_job_exec(job).removeprefix(job_exec + " ")
+
+
+        # Some Debug stuff
+        # print("job: ", job)
+        # print("job output? ", job.output)
+        # print("")
+        # print("job_args", job_args)
+
 
         # HTCondor cannot handle single quotes
         if "'" in job_args:
@@ -94,8 +163,11 @@ class Executor(RemoteExecutor):
 
         # Creating submit dictionary which is passed to htcondor.Submit
         submit_dict = {
-            "executable": job_exec,
+            # "executable": job_exec,
+            # "executable": "spras.sh",
+            "executable": self.workflow.executor_settings.job_wrapper,
             "arguments": job_args,
+            # "arguments": "-m snakemake --configfile example_config.yaml --cores 1",
             "log": join(self.jobDir, "$(ClusterId).log"),
             "output": join(self.jobDir, "$(ClusterId).out"),
             "error": join(self.jobDir, "$(ClusterId).err"),
@@ -103,14 +175,44 @@ class Executor(RemoteExecutor):
         }
 
         # Basic commands
-        if job.resources.get("getenv"):
-            submit_dict["getenv"] = job.resources.get("getenv")
-        else:
-            submit_dict["getenv"] = True
+        # if job.resources.get("getenv"):
+        #     submit_dict["getenv"] = job.resources.get("getenv")
+        # else:
+        #     submit_dict["getenv"] = True
 
         for key in ["environment", "input", "max_materialize", "max_idle"]:
             if job.resources.get(key):
                 submit_dict[key] = job.resources.get(key)
+
+
+        submit_dict["universe"] = self.universe
+        # if self.universe == "container"
+        submit_dict["container_image"] = self.container_image
+        submit_dict["request_disk"] = "4GB"
+        submit_dict["request_memory"] = "4GB"
+
+
+        submit_dict["transfer_input_files"] = "../../Snakefile, input"
+        if "spras_output1" in str(job.input):
+            submit_dict["transfer_input_files"] = submit_dict["transfer_input_files"] + ", spras_output1"
+
+        print("JOB INPUT?: ", job.input)
+        # if job.input:
+        #     submit_dict["transfer_input_files"] = submit_dict["transfer_input_files"] + ", " + ', '.join(map(str, job.input))
+            # job.input = [basename(filepath) for filepath in job.input]
+            # print("NEW JOB INPUT: ", job.input)
+        if configFile:
+            submit_dict["transfer_input_files"] = submit_dict["transfer_input_files"] + ", " + configFile
+
+        submit_dict["transfer_output_files"] = "spras_output1"
+        submit_dict["should_transfer_files"] = "YES"
+        # # submit_dict["should_transfer_files"] = "IF_NEEDED"
+        # # submit_dict["transfer_executable"] = False
+
+        submit_dict["when_to_transfer_output"] = "ON_EXIT"
+
+
+
 
         # Commands for matchmaking
         for key in [
@@ -135,25 +237,41 @@ class Executor(RemoteExecutor):
                 submit_dict[key] = job.resources.get(key)
 
         # Policy commands
-        if job.resources.get("max_retries"):
-            submit_dict["max_retries"] = job.resources.get("max_retries")
-        else:
-            submit_dict["max_retries"] = 5
+        # if job.resources.get("max_retries"):
+        #     submit_dict["max_retries"] = job.resources.get("max_retries")
+        # else:
+        #     submit_dict["max_retries"] =
 
         for key in ["allowed_execute_duration", "allowed_job_duration", "retry_until"]:
             if job.resources.get(key):
                 submit_dict[key] = job.resources.get(key)
 
+        print()
+        print()
+        print()
+        print("SUBMIT DICT: ", submit_dict)
+
+
+
+
+
         # HTCondor submit description
         self.logger.debug(f"HTCondor submit subscription: {submit_dict}")
         submit_description = htcondor.Submit(submit_dict)
+
+        print("SUBMIT DESCRIPTION: ", submit_description)
 
         # Client for HTCondor Schedduler
         schedd = htcondor.Schedd()
 
         # Submitting job to HTCondor
         try:
+            have_creds = get_creds()
+            if not have_creds:
+                raise CredsError("Credentials not found for this workflow")
             submit_result = schedd.submit(submit_description)
+        except CredsError as ce:
+            print(f"CredsError occurred: {ce}")
         except Exception as e:
             raise WorkflowError(f"Failed to submit HTCondor job: {e}")
 
