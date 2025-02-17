@@ -18,6 +18,35 @@ from os import makedirs, sep
 import re
 
 
+
+
+
+
+
+
+
+
+
+
+def is_shared_fs(in_path, shared_prefixes) -> bool:
+    """
+    Check if the job is on a shared filesystem, as configured using the
+    `shared_fs_prefixes` config for the executor
+    """
+    normalized_prefixes = [join(prefix, '') for prefix in shared_prefixes]
+    normalized_path = join(in_path, '')
+
+    return any(normalized_path.startswith(prefix) for prefix in normalized_prefixes)
+
+
+
+
+
+
+
+
+
+
 # Optional:
 # Define additional settings for your executor.
 # They will occur in the Snakemake CLI as --<executor-name>-<param-name>
@@ -94,6 +123,25 @@ class Executor(RemoteExecutor):
         # jobDir: Directory where the job will tore log, output and error files.
         self.jobDir = self.workflow.executor_settings.jobdir
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        
     def run_job(self, job: JobExecutorInterface):
         # Submitting job to HTCondor
 
@@ -146,22 +194,33 @@ class Executor(RemoteExecutor):
             elif container_image:
                 submit_dict["container_image"] = container_image
 
-
         # If we're not using a shared filesystem, we need to setup transfers
         # for any job wrapper, config files, input files, etc
         if not self.workflow.storage_settings.shared_fs_usage:
             submit_dict["should_transfer_files"] = "YES"
             submit_dict["when_to_transfer_output"] = "ON_EXIT"
 
+            # Grab our list of shared filesystem prefixes. We'll use these to determine
+            # which files HTCondor has to transfer to the EP, and which might already be accessible
+            shared_fs_prefixes = job.resources.get("shared_fs_prefixes")
+            shared_fs_prefixes = [item.strip() for item in shared_fs_prefixes.split(',')]
+            self.logger.debug(f"Shared filesystem prefixes: {shared_fs_prefixes}")
+            # Initialize the transfer input files list
+            transfer_input_files = []
+
             # Add the snakefile to the transfer list
-            submit_dict["transfer_input_files"] = abspath(self.get_snakefile())
+            snakefile = self.get_snakefile()
+            if not is_shared_fs(snakefile, shared_fs_prefixes):
+                transfer_input_files.append(snakefile)
 
             if job.input:
                 # When snakemake passes its input args to the executable, it does so using the path relative
                 # to the specified input directory, e.g. `input/foo/bar`, so we need to transfer the top-most
                 # input directories the will contain any subdirectories/files needed by the job.
                 top_most_input_directories = {path.split(sep)[0] for path in job.input}
-                submit_dict["transfer_input_files"] += ", " + ", ".join(sorted(top_most_input_directories))
+                for path in top_most_input_directories:
+                    if path and not is_shared_fs(path, shared_fs_prefixes):
+                        transfer_input_files.append(path)
 
             if self.workflow.configfiles:
                 # Note that when we transfer the config file(s), we'll pass Condor an absolute path, but we need to
@@ -171,18 +230,29 @@ class Executor(RemoteExecutor):
                 for fpath in self.workflow.configfiles:
                     fname = basename(fpath)
                     config_fnames.append(fname)
+                    if fpath and not is_shared_fs(fpath, shared_fs_prefixes):
+                        transfer_input_files.append(fpath)
                 config_arg = " ".join(config_fnames)
 
                 configfiles_pattern = r"--configfiles .*?(?=( --|$))"
                 submit_dict["arguments"] = re.sub(configfiles_pattern, f"--configfiles {config_arg}", submit_dict["arguments"])
 
-                submit_dict["transfer_input_files"] += ", " + ", ".join(str(path) for path in self.workflow.configfiles)
+            if transfer_input_files:
+                self.logger.debug(f"Transfer input files: {transfer_input_files}")
+                submit_dict["transfer_input_files"] = ", ".join(sorted(transfer_input_files))
 
             if job.output:
+                transfer_output_files = []
                 # For outputs, we only care about the parent directory, which we'll tell
                 # HTCondor to transfer back to the AP.
                 top_most_output_directories = {path.split(sep)[0] for path in job.output}
-                submit_dict["transfer_output_files"] = ", ".join(sorted(top_most_output_directories))
+                for path in top_most_output_directories:
+                    if path and not is_shared_fs(path, shared_fs_prefixes):
+                        transfer_output_files.append(path)
+                
+                if transfer_output_files:
+                    self.logger.debug(f"Transfer output files: {transfer_output_files}")
+                    submit_dict["transfer_output_files"] = ", ".join(sorted(transfer_output_files))
 
         # Basic commands
         if job.resources.get("getenv"):
