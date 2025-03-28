@@ -280,6 +280,13 @@ class Executor(RemoteExecutor):
                 classad_key = "+" + key.removeprefix("classad_")
                 submit_dict[classad_key] = job.resources.get(key)
 
+        # handle submit credentials logic
+        oauth_services = htcondor.param.get("LOCAL_CREDMON_PROVIDER_NAMES")
+        if oauth_services is None:
+            oauth_services = htcondor.param.get("LOCAL_CREDMON_PROVIDER_NAME")
+        if oauth_services is not None:
+            submit_dict["use_oauth_services"] = oauth_services
+
         # HTCondor submit description
         self.logger.debug(f"HTCondor submit subscription: {submit_dict}")
         submit_description = htcondor.Submit(submit_dict)
@@ -289,13 +296,7 @@ class Executor(RemoteExecutor):
 
         # Submitting job to HTCondor
         try:
-            have_creds = get_creds()
-            if not have_creds:
-                raise CredsError("Credentials not found for this workflow")
             submit_result = schedd.submit(submit_description)
-        except CredsError as ce:
-            traceback.print_exc()
-            print(f"CredsError occurred: {ce}")
         except Exception as e:
             traceback.print_exc()
             raise WorkflowError(f"Failed to submit HTCondor job: {e}")
