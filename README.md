@@ -57,6 +57,17 @@ snakemake "$@"
 \*\* Custom ClassAds can be defined using the `classad_` prefix as a custom job resource. For example, to define the ClassAd `+MyClassAd`, define `classad_MyClassAd` in
 the job's resources.
 
+** The plugin also supports the `htcondor_submit_` resource prefix to pass
+raw HTCondor submit attributes through to the submit description (set per-rule
+in the `Snakefile` or in a profile). For example:
+- `htcondor_submit_output_destination` -> `output_destination`
+- `htcondor_submit_MY__SendCredential` -> `MY.SendCredential` (use double underscore to represent `.`)
+
+Behavior mirrors `classad_`: string values are quoted; non-string values (ints, bools) are passed through unchanged. Use only strings, ints, or bools.
+
+If you define `htcondor_submit_<name>` where `<name>` corresponds to any of the supported fields listed in the tables above, that `htcondor_submit_` entry will be ignored.
+In those cases, set the resource directly (for example `request_memory` or `htcondor_transfer_input_files`) instead of using `htcondor_submit_*`.
+
 \*\*\* `stream_output` and `stream_error` are for testing or debugging one or two jobs **at a time**. Do **not** use for many simultaneous jobs!
 Streaming the job's standard out and standard error may be useful to monitor a job's progress while it runs on the execution point.
 However, **be aware** that for high-concurrency/high-throughput workflows, this streaming can be very costly and may be detrimental not only to your own jobs, but to the entire shared computing resource.
