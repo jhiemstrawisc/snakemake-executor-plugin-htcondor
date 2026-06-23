@@ -1,0 +1,17 @@
+# Execution Point image: HTCondor startd + Snakemake.
+#
+# The EP runs each rule by executing `snakemake` for that single rule (via
+# wrapper.sh), in vanilla universe, as a dedicated per-slot account (slot1_N).
+# It therefore needs python + snakemake installed SYSTEM-WIDE so those accounts
+# can run them. It does NOT need the executor plugin (the plugin only runs on
+# the AP). The base image's CMD (/start.sh -> supervisord -> startd) is kept.
+FROM htcondor/execute:latest
+
+USER root
+
+RUN dnf install -y \
+        python3.11 \
+        python3.11-pip \
+    && dnf clean all \
+    && pip3.11 install --no-cache-dir "snakemake>=9.6.2" \
+    && ln -sf /usr/bin/python3.11 /usr/local/bin/python
