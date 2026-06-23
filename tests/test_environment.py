@@ -25,19 +25,24 @@ class TestFormatHtcondorEnvironment:
             Executor._format_htcondor_environment.__get__(self.executor, Executor)
         )
 
+    # The method returns an HTCondor new-syntax environment *body* (the
+    # NAME=value assignments that go inside the outer double quotes, which the
+    # caller adds).  A simple value is emitted bare; only values containing
+    # whitespace are single-quoted.  Literal double/single quotes are doubled.
+
     def test_single_variable(self):
-        """Single key-value pair is serialized correctly."""
+        """Single key-value pair is serialized as a bare NAME=value assignment."""
         result = self.executor._format_htcondor_environment({"FOO": "bar"})
-        assert result == 'FOO="bar"'
+        assert result == "FOO=bar"
 
     def test_multiple_variables(self):
-        """Multiple variables are space-separated, each in KEY=\"value\" form."""
+        """Multiple variables are space-separated NAME=value assignments."""
         result = self.executor._format_htcondor_environment(
             {"A": "1", "B": "2", "C": "3"}
         )
-        assert 'A="1"' in result
-        assert 'B="2"' in result
-        assert 'C="3"' in result
+        assert "A=1" in result
+        assert "B=2" in result
+        assert "C=3" in result
         # They should be space-separated
         parts = result.split(" ")
         assert len(parts) == 3
@@ -48,27 +53,37 @@ class TestFormatHtcondorEnvironment:
         assert result == ""
 
     def test_value_with_double_quotes_escaped(self):
-        """Double quotes inside values must be doubled for HTCondor."""
+        """Double quotes inside values are doubled; the spaced value is single-quoted."""
         result = self.executor._format_htcondor_environment({"MSG": 'say "hello"'})
-        assert result == 'MSG="say ""hello"""'
+        assert result == 'MSG=\'say ""hello""\''
+
+    def test_value_with_double_quotes_no_space(self):
+        """Embedded double quotes are doubled even without surrounding spaces."""
+        result = self.executor._format_htcondor_environment({"V": 'pre"mid"post'})
+        assert result == 'V=pre""mid""post'
 
     def test_value_with_spaces(self):
-        """Values with spaces are properly quoted."""
+        """Values with spaces are wrapped in single quotes."""
         result = self.executor._format_htcondor_environment(
-            {"PATH": "/usr/bin /usr/local/bin"}
+            {"PATHLIST": "/usr/bin /usr/local/bin"}
         )
-        assert result == 'PATH="/usr/bin /usr/local/bin"'
+        assert result == "PATHLIST='/usr/bin /usr/local/bin'"
+
+    def test_value_with_single_quote_escaped(self):
+        """Single quotes inside a (spaced) value are doubled."""
+        result = self.executor._format_htcondor_environment({"MSG": "it's here"})
+        assert result == "MSG='it''s here'"
 
     def test_value_with_equals_sign(self):
-        """Values containing = are properly quoted."""
+        """Values containing = need no special quoting when there is no space."""
         result = self.executor._format_htcondor_environment({"OPTS": "key=value"})
-        assert result == 'OPTS="key=value"'
+        assert result == "OPTS=key=value"
 
     def test_non_string_value_coerced(self):
         """Non-string values are coerced to strings."""
         result = self.executor._format_htcondor_environment({"COUNT": 42, "FLAG": True})
-        assert 'COUNT="42"' in result
-        assert 'FLAG="True"' in result
+        assert "COUNT=42" in result
+        assert "FLAG=True" in result
 
 
 # ---------------------------------------------------------------------------

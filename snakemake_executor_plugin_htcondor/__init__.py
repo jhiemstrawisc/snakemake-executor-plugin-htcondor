@@ -462,26 +462,44 @@ class Executor(RemoteExecutor):
 
     def _format_htcondor_environment(self, envvars: dict) -> str:
         """
-        Serialize a dict of environment variables to HTCondor's new-style
-        environment string format.
+        Serialize a dict of environment variables to an HTCondor new-syntax
+        environment *body* (the space-separated ``NAME=value`` assignments that
+        go *inside* the outer double quotes).
 
-        HTCondor new-style format places each assignment as KEY="value",
-        separated by spaces.  Double-quote characters inside a value are
-        escaped by doubling them (e.g. a value containing '"' becomes '""').
+        HTCondor's new environment syntax requires the entire environment value
+        to be wrapped in double quotes; the caller (run_job) adds those outer
+        quotes once, around the combined body.  Within that body:
 
-        Example output: 'SNAKEMAKE_STORAGE_S3_REGION="us-east-1" FOO="bar"'
+        * Assignments are ``NAME=value`` separated by single spaces.
+        * A literal double quote in a value is written as ``""``.
+        * A literal single quote in a value is written as ``''``.
+        * A value containing whitespace must be wrapped in single quotes, so the
+          space is not parsed as a delimiter between assignments.
+
+        Example body: ``SNAKEMAKE_STORAGE_S3_REGION=us-east-1 GREETING='hi there'``
+        which the caller wraps as ``"SNAKEMAKE_STORAGE_S3_REGION=us-east-1 ...``"``.
+
+        NOTE: the previous implementation emitted ``KEY="value"`` per variable
+        but never added the outer quotes, so HTCondor fell back to *old* syntax
+        and delivered values wrapped in literal double quotes (and broke on
+        values containing spaces).
 
         Args:
             envvars: Dict mapping variable names to their string values.
 
         Returns:
-            HTCondor new-style environment string, ready to assign to the
-            ``environment`` key in an htcondor.Submit dict.
+            HTCondor new-syntax environment body (no outer quotes).
         """
         parts = []
         for k, v in envvars.items():
-            v_escaped = str(v).replace('"', '""')
-            parts.append(f'{k}="{v_escaped}"')
+            s = str(v)
+            # Double-quotes and single-quotes are escaped by doubling them.
+            escaped = s.replace('"', '""').replace("'", "''")
+            # A value with whitespace must be single-quoted so the space is not
+            # treated as a separator between assignments.
+            if any(ch.isspace() for ch in s):
+                escaped = f"'{escaped}'"
+            parts.append(f"{k}={escaped}")
         return " ".join(parts)
 
     def _format_size_mb(self, mb_value: int) -> str:
@@ -1220,9 +1238,13 @@ class Executor(RemoteExecutor):
         if user_env := job.resources.get("environment"):
             # User-provided value is appended after Snakemake vars; user values
             # for the same key will shadow ours (last assignment wins in HTCondor).
+            # It is treated as a new-syntax body fragment (NAME=value ...).
             env_parts.append(str(user_env))
         if env_parts:
-            submit_dict["environment"] = " ".join(env_parts)
+            # HTCondor's new environment syntax requires the whole value to be
+            # wrapped in double quotes — without them HTCondor uses old syntax
+            # and values arrive wrapped in literal quotes (and break on spaces).
+            submit_dict["environment"] = '"' + " ".join(env_parts) + '"'
 
         for key in ["input", "max_materialize", "max_idle"]:
             self._set_resources(submit_dict, job, key)
