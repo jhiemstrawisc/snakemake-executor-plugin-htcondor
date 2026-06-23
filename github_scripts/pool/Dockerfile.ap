@@ -22,8 +22,11 @@ RUN dnf install -y \
 #
 # POETRY_DYNAMIC_VERSIONING_BYPASS lets us build from a COPYed tree with no .git
 # history (poetry-dynamic-versioning would otherwise fail to derive a version).
+# Note: poetry.lock is git-ignored (regenerated in CI), so it is NOT copied here
+# and is not needed -- we install with pip, and the wheel build only needs
+# pyproject.toml + README.md (referenced as the project readme) + the package.
 ENV POETRY_DYNAMIC_VERSIONING_BYPASS=0.0.0
-COPY pyproject.toml poetry.lock README.md /opt/plugin/
+COPY pyproject.toml README.md /opt/plugin/
 COPY snakemake_executor_plugin_htcondor /opt/plugin/snakemake_executor_plugin_htcondor
 RUN pip3.11 install --no-cache-dir "snakemake>=9.6.2" /opt/plugin \
     && ln -sf /usr/bin/python3.11 /usr/local/bin/python
