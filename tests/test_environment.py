@@ -27,8 +27,9 @@ class TestFormatHtcondorEnvironment:
 
     # The method returns an HTCondor new-syntax environment *body* (the
     # NAME=value assignments that go inside the outer double quotes, which the
-    # caller adds).  A simple value is emitted bare; only values containing
-    # whitespace are single-quoted.  Literal double/single quotes are doubled.
+    # caller adds).  A simple value is emitted bare; values containing whitespace
+    # or a single quote are single-quoted.  Literal double/single quotes are
+    # doubled.
 
     def test_single_variable(self):
         """Single key-value pair is serialized as a bare NAME=value assignment."""
@@ -70,9 +71,24 @@ class TestFormatHtcondorEnvironment:
         assert result == "PATHLIST='/usr/bin /usr/local/bin'"
 
     def test_value_with_single_quote_escaped(self):
-        """Single quotes inside a (spaced) value are doubled."""
+        """A single quote in a spaced value is doubled inside the single-quoted value."""
         result = self.executor._format_htcondor_environment({"MSG": "it's here"})
         assert result == "MSG='it''s here'"
+
+    def test_value_with_single_quote_no_space(self):
+        """A single quote WITHOUT whitespace still forces single-quote wrapping.
+
+        Regression test: if such a value is not wrapped, the doubled '' lands
+        outside any single-quoted section and HTCondor reads it as an empty
+        section, silently dropping the quote (e.g. "it's" -> "its").
+        """
+        result = self.executor._format_htcondor_environment({"MSG": "it's"})
+        assert result == "MSG='it''s'"
+
+    def test_value_that_is_only_a_single_quote(self):
+        """A lone single quote is wrapped and doubled, not emitted bare."""
+        result = self.executor._format_htcondor_environment({"Q": "'"})
+        assert result == "Q=''''"
 
     def test_value_with_equals_sign(self):
         """Values containing = need no special quoting when there is no space."""
@@ -84,6 +100,46 @@ class TestFormatHtcondorEnvironment:
         result = self.executor._format_htcondor_environment({"COUNT": 42, "FLAG": True})
         assert "COUNT=42" in result
         assert "FLAG=True" in result
+
+
+class TestAssembleEnvironment:
+    """Tests for _assemble_environment() — merge + outer-quote wrapping."""
+
+    def setup_method(self):
+        self.executor = Mock(spec=Executor)
+        # _assemble_environment calls _format_htcondor_environment internally.
+        self.executor._format_htcondor_environment = (
+            Executor._format_htcondor_environment.__get__(self.executor, Executor)
+        )
+        self.executor._assemble_environment = Executor._assemble_environment.__get__(
+            self.executor, Executor
+        )
+
+    def test_snakemake_env_only_is_wrapped(self):
+        """The combined body is wrapped in the outer double quotes new syntax needs."""
+        result = self.executor._assemble_environment({"A": "1"}, None)
+        assert result == '"A=1"'
+
+    def test_merges_snakemake_and_user_env(self):
+        """The user `environment` resource is appended after the Snakemake vars."""
+        result = self.executor._assemble_environment({"A": "1"}, "B=2")
+        assert result == '"A=1 B=2"'
+
+    def test_user_env_only(self):
+        """With no Snakemake vars, only the user fragment is wrapped."""
+        result = self.executor._assemble_environment({}, "B=2")
+        assert result == '"B=2"'
+
+    def test_nothing_to_set_returns_none(self):
+        """No vars at all → None (so the caller omits the environment key)."""
+        assert self.executor._assemble_environment({}, None) is None
+
+    def test_value_is_wrapped_in_double_quotes(self):
+        """The result always begins and ends with a double quote (new-syntax frame)."""
+        result = self.executor._assemble_environment({"GREETING": "hi there"}, None)
+        assert result.startswith('"')
+        assert result.endswith('"')
+        assert result == "\"GREETING='hi there'\""
 
 
 # ---------------------------------------------------------------------------

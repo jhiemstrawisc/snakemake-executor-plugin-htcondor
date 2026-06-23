@@ -16,7 +16,8 @@ name: htcondor-torture
 
 services:
   cm:
-    image: htcondor/cm:latest
+    # Pinned to a specific HTCondor version (not :latest) for reproducible builds.
+    image: htcondor/cm:25.11.0-el9
     hostname: cm
     environment:
       CONDOR_HOST: cm

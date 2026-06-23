@@ -3,7 +3,9 @@
 # Build context is the executor repo root (see docker-compose.yml) so we can
 # COPY the plugin source and install it. The base image's CMD (/start.sh ->
 # supervisord -> condor daemons) is preserved.
-FROM htcondor/submit:latest
+#
+# Pinned to a specific HTCondor version (not :latest) for reproducible CI builds.
+FROM htcondor/submit:25.11.0-el9
 
 USER root
 

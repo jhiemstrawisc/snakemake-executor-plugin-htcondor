@@ -768,8 +768,13 @@ rule shared_fs_mixed:
 #   - classad_<name>        -> +<name> = "<value>"   (custom ClassAd)
 #   - htcondor_submit_<name> -> <name> = ...          (raw submit attribute)
 #   - requirements           -> Requirements expression (matchmaking)
-# The requirements clause is "IsContainer == true", which the EP advertises
-# (STARTD_ATTR IsContainer = true), so the job still matches and runs.
+#
+# The requirements clause is "TortureTestEP == true", a custom machine attribute
+# the EP image advertises (see Dockerfile.ep).  This makes the requirements test
+# meaningful in BOTH directions: the .job.ad grep confirms the executor wrote
+# the expression into the submit description, and the job *running to completion
+# at all* proves that expression actually matched the EP — the job would never
+# start if `requirements` were dropped or matched nothing.
 rule attribute_check:
     input:
         "data/{sample}_numbers.txt"
@@ -786,7 +791,7 @@ rule attribute_check:
         # The "__" -> "." translation turns MY__TortureRaw into MY.TortureRaw,
         # which HTCondor stores in the job ad as TortureRaw.
         htcondor_submit_MY__TortureRaw="raw_value",
-        requirements="IsContainer == true"
+        requirements="TortureTestEP == true"
     shell:
         """
         echo "=== ClassAd / raw-submit / requirements passthrough check ===" > {output}
@@ -803,10 +808,13 @@ rule attribute_check:
         else
             echo "FAIL: htcondor_submit_MY__TortureRaw not found in .job.ad" >> {output}; fail=1
         fi
-        if grep -qi 'IsContainer' .job.ad; then
-            echo "PASS: requirements expression present (matched EP via IsContainer)" >> {output}
+        # The job only runs if this requirement matched the EP, so reaching this
+        # rule already proves matchmaking; the grep confirms the executor wrote
+        # the expression into the submit description (.job.ad).
+        if grep -qi 'TortureTestEP' .job.ad; then
+            echo "PASS: requirements reached .job.ad and matched the EP (TortureTestEP)" >> {output}
         else
-            echo "FAIL: requirements (IsContainer) not found in .job.ad" >> {output}; fail=1
+            echo "FAIL: requirements (TortureTestEP) not found in .job.ad" >> {output}; fail=1
         fi
 
         if [ "$fail" -ne 0 ]; then
@@ -870,16 +878,28 @@ rule env_special_check:
     shell:
         """
         expected='pre"mid"post'
+        expected_sq="it's"
         echo "=== env var escaping check ===" > {output}
         echo "sample: {wildcards.sample}" >> {output}
-        echo "expected: $expected" >> {output}
-        echo "received: $TORTURE_QUOTE_VAR" >> {output}
-        echo "received(stderr): [$TORTURE_QUOTE_VAR]" >&2
+        echo "expected (double-quote): $expected" >> {output}
+        echo "received (double-quote): $TORTURE_QUOTE_VAR" >> {output}
+        echo "expected (single-quote): $expected_sq" >> {output}
+        echo "received (single-quote): $TORTURE_SQUOTE_VAR" >> {output}
+        echo "received(stderr): dq=[$TORTURE_QUOTE_VAR] sq=[$TORTURE_SQUOTE_VAR]" >&2
 
         if [ "$TORTURE_QUOTE_VAR" = "$expected" ]; then
-            echo "PASS: env var with embedded quotes round-tripped intact" >> {output}
+            echo "PASS: value with embedded double quotes round-tripped intact" >> {output}
         else
-            echo "FAIL: env var escaping mismatch" >> {output}
+            echo "FAIL: double-quote escaping mismatch" >> {output}
+            cat {output} >&2
+            exit 1
+        fi
+
+        # Regression check for the single-quote-without-whitespace fix.
+        if [ "$TORTURE_SQUOTE_VAR" = "$expected_sq" ]; then
+            echo "PASS: value with an embedded single quote round-tripped intact" >> {output}
+        else
+            echo "FAIL: single-quote escaping mismatch (got '$TORTURE_SQUOTE_VAR')" >> {output}
             cat {output} >&2
             exit 1
         fi

@@ -34,6 +34,11 @@ export TORTURE_TEST_VAR="hello_from_ap"
 # --envvars below; the env_special_check rule asserts it round-trips intact.
 export TORTURE_QUOTE_VAR='pre"mid"post'
 
+# Env var with an embedded single quote and NO whitespace -- the regression
+# case for the executor's single-quote escaping (a value like this was silently
+# corrupted to "its" before the fix). env_special_check asserts it round-trips.
+export TORTURE_SQUOTE_VAR="it's"
+
 # Env var that is deliberately NOT passed via --envvars.  The getenv_check rule
 # uses getenv=True, so the only way this reaches the EP is HTCondor's getenv
 # capture of the submit-side (AP) environment.
@@ -61,7 +66,7 @@ snakemake \
     --shared-fs-usage none \
     --htcondor-shared-fs-prefixes "$SHARED_FS_PREFIX" \
     --verbose \
-    --envvars TORTURE_TEST_VAR TORTURE_QUOTE_VAR
+    --envvars TORTURE_TEST_VAR TORTURE_QUOTE_VAR TORTURE_SQUOTE_VAR
 
 echo ""
 echo "=== Workflow completed successfully ==="
